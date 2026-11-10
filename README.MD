@@ -1,6 +1,21 @@
-# Sales Brochure Generator
+# LLM Engineering Lab
 
-Generate a short Markdown company brochure for prospective customers, investors, and recruits using content from the company's public website.
+A hands-on lab where I learn LLM engineering by building and measuring real things, and write down why each decision was made. The first project is a **sales brochure generator**: it reads a company's public website and writes a short Markdown brochure for prospective customers, investors, and recruits. Further experiments (RAG, tool calling, UIs) are built on top of it.
+
+## What this project demonstrates
+
+| Skill | Where to look |
+|---|---|
+| Calling LLM APIs, including streaming responses | `brochure_generation.py`, `llm_client.py` |
+| Structured output: asking the model for JSON (link selection) | `brochure_generation.py` |
+| Token budgeting and cost control, backed by measurements on real sites | `tokens.py`, `config.py`, [Design decisions](#design-decisions) |
+| RAG building blocks: token-based chunking, embeddings, similarity ranking (in progress) | `rag.py`, [Flow being built](#flow-being-built-rag-experiment) |
+| Tool calling and an agent-style loop, including assembling streamed tool-call fragments | `SalesBrochureWithUI/conversational_AI_with_ui.py` |
+| Gradio UIs: a streaming form and a chat | `SalesBrochureWithUI/` |
+| Web scraping with `requests` and BeautifulSoup | `scraper.py` |
+| Engineering judgment: trade-offs, known issues and limitations documented openly | [Design decisions](#design-decisions), [Limitations](#limitations) |
+
+The brochure generator is the vehicle; the focus is the engineering decisions around it.
 
 ## Design focus: token budgets and cost control
 
