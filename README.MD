@@ -45,7 +45,7 @@ Progress:
 | Step | What | Status |
 |---|---|---|
 | R1 | Chunk page text in tokens, with overlap, keeping page type, URL and position | Done (`rag.py`) |
-| R2 | Embed chunks and the query | Next |
+| R2 | Embed chunks and the query | In progress (`embed_texts` in `rag.py` works; query embedding and caching next) |
 | R3 | Cosine similarity ranking | Planned |
 | R4 | Fill the token budget with top chunks, restore order | Planned |
 | R5 | Compare against the baseline on the same cached pages | Planned |
@@ -59,9 +59,12 @@ Progress:
 | `brochure_generation.py` | Pipeline: link selection, page fetching, brochure generation (normal and streaming) |
 | `scraper.py` | Fetches links and page text with `requests` and BeautifulSoup |
 | `tokens.py` | Token counting, truncation, and encode/decode helpers (`tiktoken`) |
-| `rag.py` | Token-based chunking (`chunk_text`, `chunk_pages`); embeddings and ranking will go here |
+| `rag.py` | Token-based chunking (`chunk_text`, `chunk_pages`) and embeddings (`embed_texts`); ranking will go here |
+| `llm_client.py` | The single shared OpenAI client used by the pipeline, the RAG code and the UI |
 | `prompts.py` | System and user prompts |
 | `config.py` | Model name and size limits |
+| `SalesBrochureWithUI/stream_brochure_with_ui.py` | Gradio form: enter a URL, watch the brochure stream in |
+| `SalesBrochureWithUI/conversational_AI_with_ui.py` | Gradio chat that decides by itself when to generate a brochure (tool calling) |
 
 ## Requirements
 
@@ -100,6 +103,37 @@ python main.py https://example.com
 ```
 
 Add `--stream` to print the brochure as it is generated. Without it, the full brochure is printed at the end. The brochure is not saved to a file.
+
+## Web UI (Gradio)
+
+Two small Gradio apps live in `SalesBrochureWithUI/`. Run them **from the project root**, because they import `config`, `llm_client` and `brochure_generation` from the root folder.
+
+Plain URL form (streams the brochure):
+
+```bash
+python -m SalesBrochureWithUI.stream_brochure_with_ui
+```
+
+Chat that calls the brochure generator as a tool when the user asks for one:
+
+```bash
+python -m SalesBrochureWithUI.conversational_AI_with_ui
+```
+
+To reload automatically when you save a file, use the Gradio CLI. It runs the file as a script, so add the project root to `PYTHONPATH`, and tell it the name of the app object (`view`):
+
+```bash
+PYTHONPATH=. gradio SalesBrochureWithUI/conversational_AI_with_ui.py --demo-name view
+```
+
+Why `-m` and `PYTHONPATH`: running `python path/to/file.py` only puts that file's own folder on `sys.path`, so `from config import ...` fails with `ModuleNotFoundError`. `python -m Package.module` from the root, or `PYTHONPATH=.`, makes the root-level modules importable.
+
+How the chat works (`conversational_AI_with_ui.py`):
+
+1. The user message goes to the model together with a tool schema describing `stream_brochure_for_ui_chat(website_url)`.
+2. The reply is streamed. Plain text is shown as it arrives; a tool call arrives in fragments (`id` and name in the first, JSON `arguments` in pieces), so fragments are merged by `index` and the arguments are parsed only after the stream ends.
+3. The function is looked up by name in `AVAILABLE_FUNCTIONS` and called. A generator tool (`inspect.isgeneratorfunction`) is iterated and each partial text is shown live; a normal tool's result is shown as one string.
+4. Gradio replaces the message on every yield, so the chat keeps a running string and shows earlier tools' finished text above the one that is streaming.
 
 ## Configuration (`config.py`)
 
@@ -152,6 +186,16 @@ The baseline is kept so the two approaches can be compared on the same pages.
 
 **Why must pages reach `rag.py` (nearly) uncut?** If the scraper has already cut a page to 2,500 tokens, retrieval can never choose the later parts. The baseline cap therefore must not apply to the RAG path; only a large safety cap should, so one huge page cannot flood the pipeline.
 
+### Chat UI and tool calling
+
+**Why tool calling and not URL detection?** A regex on the message would treat any pasted link as "make a brochure" ("what does https://x.com do?") and would miss phrasing like "do one for stripe's site". With a tool schema the model decides whether the user wants a brochure and extracts the URL itself.
+
+**Why stop after the tool and not send the result back to the model?** The tool already runs its own LLM call and its output is the final answer. Feeding thousands of tokens of finished brochure back for a second model call adds cost and latency, and the model might paraphrase it. The full round trip (assistant `tool_calls` message, then a `tool` message with the matching `tool_call_id`, then another call) is only worth it for tools that return raw data the model must explain.
+
+**Why does the model pick a tool by name and description only?** It never sees the Python functions, so it cannot know whether one streams. Streaming is a UI concern: expose one tool per purpose and point its name at the implementation you want.
+
+**Why does `chat` yield instead of return?** `chat` is a generator, so a `return value` ends it and the value is discarded; Gradio then shows an empty reply with no error. Results must be `yield`ed (or forwarded with `yield from`).
+
 ## Measurements
 
 Baseline input and output (before per-page token caps):
@@ -168,6 +212,9 @@ Chunking huggingface.com with the uncut scraper: 11 pages, 130 chunks, 43,664 ch
 
 - With `RAG_ENABLED=true`, pages are fetched **without** any cap and chunked, but the chunks are not used yet: all page text is still sent to the model. Nothing is ranked or limited until R2 to R4 are connected, so a run with the flag on can exceed `MAX_CONTENT_TOKENS`. With the flag off (the default), the capped baseline runs for both normal and streaming modes.
 - There is no RAG safety cap in `config.py` yet.
+- The chat UI has no tool-call limit: if the model asks for several tools in one response they run one after another. `parallel_tool_calls=False` on the request would restrict it to one.
+- Brochure generation in the chat can sit empty for a while, because scraping and link selection happen before the first streamed text.
+- `stream_brochure_with_ui.py` still has leftover tutorial code (`message_gpt`, `stream_gpt`, the example row and the "Message Shouter" title).
 - The link-selection step is not deterministic, so two runs on the same site can fetch different pages. Cache fetched pages (for example to a JSON file) when comparing baseline and RAG.
 - The last chunk of a page can be tiny, with only a token or two of new text.
 

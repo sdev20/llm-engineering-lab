@@ -1,6 +1,6 @@
 import os
 from openai import OpenAI
-import config  # noqa: F401  (importing config loads .env before the key is read)
+import config as config  # noqa: F401  (importing config loads .env before the key is read)
 
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
