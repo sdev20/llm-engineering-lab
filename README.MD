@@ -1,8 +1,8 @@
 # AI Engineering Lab
 
-A hands-on lab where different concepts of AI engineering has been explored by building and measuring LLM output, and why each decision was made. 
+A hands-on lab for exploring AI engineering concepts by building real features, measuring LLM output, and recording why each decision was made.
 
-The project is a **sales brochure generator**: Based on a company's website, the projects writes a short Markdown brochure for prospective customers, investors, and recruits. Further experiments (RAG, tool calling, UIs) are built on top of it.
+The project is a **sales brochure generator**: given a company's website, it writes a short Markdown brochure for prospective customers, investors, and recruits. Further experiments (RAG, tool calling, UIs) are built on top of it.
 
 The brochure generator is the vehicle; the focus is the engineering decisions around it.
 
