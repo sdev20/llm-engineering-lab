@@ -1,6 +1,10 @@
-# LLM Engineering Lab
+# AI Engineering Lab
 
-A hands-on lab where I learn LLM engineering by building and measuring real things, and write down why each decision was made. The first project is a **sales brochure generator**: it reads a company's public website and writes a short Markdown brochure for prospective customers, investors, and recruits. Further experiments (RAG, tool calling, UIs) are built on top of it.
+A hands-on lab where different concepts of AI engineering has been explored by building and measuring LLM output, and why each decision was made. 
+
+The project is a **sales brochure generator**: Based on a company's website, the projects writes a short Markdown brochure for prospective customers, investors, and recruits. Further experiments (RAG, tool calling, UIs) are built on top of it.
+
+The brochure generator is the vehicle; the focus is the engineering decisions around it.
 
 ## What this project demonstrates
 
@@ -15,7 +19,6 @@ A hands-on lab where I learn LLM engineering by building and measuring real thin
 | Web scraping with `requests` and BeautifulSoup | `scraper.py` |
 | Engineering judgment: trade-offs, known issues and limitations documented openly | [Design decisions](#design-decisions), [Limitations](#limitations) |
 
-The brochure generator is the vehicle; the focus is the engineering decisions around it.
 
 ## Design focus: token budgets and cost control
 
@@ -25,7 +28,7 @@ The brochure itself is simple to produce. Most of the engineering effort here go
 - What do we keep when a site is bigger than the budget?
 - How do we choose what to keep so the useful facts survive?
 
-Decisions below are made from measurements on real sites (google.com, cellares.com, huggingface.com), not guesses. In LLM-engineering terms, the limits are *resource guardrails* (cost and size caps). There are no safety or quality guardrails yet (see Limitations).
+Decisions below are made from measurements on real sites (google.com,huggingface.com). In LLM-engineering terms, the limits are *resource guardrails* (cost and size caps). There are no safety or quality guardrails yet (see Limitations).
 
 ## How it works
 
@@ -79,7 +82,7 @@ Progress:
 | `prompts.py` | System and user prompts |
 | `config.py` | Model name and size limits |
 | `SalesBrochureWithUI/stream_brochure_with_ui.py` | Gradio form: enter a URL, watch the brochure stream in |
-| `SalesBrochureWithUI/conversational_AI_with_ui.py` | Gradio chat that decides by itself when to generate a brochure (tool calling) |
+| `SalesBrochureWithUI/conversational_AI_with_ui.py` | Gradio chat that decides by itself which tools to call and then answers from their results |
 
 ## Requirements
 
@@ -145,10 +148,15 @@ Why `-m` and `PYTHONPATH`: running `python path/to/file.py` only puts that file'
 
 How the chat works (`conversational_AI_with_ui.py`):
 
-1. The user message goes to the model together with a tool schema describing `stream_brochure_for_ui_chat(website_url)`.
-2. The reply is streamed. Plain text is shown as it arrives; a tool call arrives in fragments (`id` and name in the first, JSON `arguments` in pieces), so fragments are merged by `index` and the arguments are parsed only after the stream ends.
-3. The function is looked up by name in `AVAILABLE_FUNCTIONS` and called. A generator tool (`inspect.isgeneratorfunction`) is iterated and each partial text is shown live; a normal tool's result is shown as one string.
-4. Gradio replaces the message on every yield, so the chat keeps a running string and shows earlier tools' finished text above the one that is streaming.
+1. The conversation (system prompt, Gradio `history`, the new message) goes to the model together with a tool schema for multiple tools.
+2. If the response from tools is not required to send to llm: Direct streaming from tools: 
+the reply is streamed. Plain text is shown as it arrives; a tool call arrives in fragments (`id` and name in the first, JSON `arguments` in pieces), so fragments are merged by `index` and the arguments are parsed only after the stream ends.
+3. If the response from tools is required to send to llm to summarize: 
+if the model asked for tools, the chat appends **one assistant message** that carries all the `tool_calls` (each with `id`, `type: "function"` and the raw `arguments` string), then runs each function from `AVAILABLE_FUNCTIONS` and appends one `tool` message per call, matched by `tool_call_id`. Tool results must be strings.
+
+The loop calls the model again with those results, and the model writes the final answer. It repeats until a response has no tool calls (`while True` / `break`).
+
+Gradio's `history` only contains what was displayed, so tool calls and tool outputs from earlier turns are not remembered in later turns; only the final replies are.
 
 ## Configuration (`config.py`)
 
@@ -205,7 +213,19 @@ The baseline is kept so the two approaches can be compared on the same pages.
 
 **Why tool calling and not URL detection?** A regex on the message would treat any pasted link as "make a brochure" ("what does https://x.com do?") and would miss phrasing like "do one for stripe's site". With a tool schema the model decides whether the user wants a brochure and extracts the URL itself.
 
-**Why stop after the tool and not send the result back to the model?** The tool already runs its own LLM call and its output is the final answer. Feeding thousands of tokens of finished brochure back for a second model call adds cost and latency, and the model might paraphrase it. The full round trip (assistant `tool_calls` message, then a `tool` message with the matching `tool_call_id`, then another call) is only worth it for tools that return raw data the model must explain.
+**Why send the tool results back to the model?** The model can combine the output of several tools into a single coherent reply. This requires a full round trip: tool results are returned to the model, which then writes the final answer.
+
+Trade-offs of this design:
+
+- **Cost:** the full brochure is sent back to the model as input tokens.
+- **Latency:** nothing streams from the tools (`create_brochure` is the non-streaming function), so the user waits for the final reply.
+- **Fidelity:** the model may paraphrase or shorten the brochure.
+
+For a single brochure tool, streaming the tool's output directly and ending the turn is cheaper and faster. The round trip pays off when a reply depends on more than one tool.
+
+**Why does the order of messages matter?** The API requires an assistant message containing `tool_calls`, followed by one `tool` message for every call id, before the next model call. Leaving out the assistant message, using a made-up role, or putting a non-string (for example a generator) in a tool message's `content` gives a 400 error.
+
+**Why might the model not call a tool?** With `tool_choice="auto"` it calls only the tools that serve the request, judged from each tool's `name` and `description`. A vague description or a request that does not mention images means the images tool is skipped. Clear "use when the user asks for …" wording in the description helps.
 
 **Why does the model pick a tool by name and description only?** It never sees the Python functions, so it cannot know whether one streams. Streaming is a UI concern: expose one tool per purpose and point its name at the implementation you want.
 
@@ -227,8 +247,10 @@ Chunking huggingface.com with the uncut scraper: 11 pages, 130 chunks, 43,664 ch
 
 - With `RAG_ENABLED=true`, pages are fetched **without** any cap and chunked, but the chunks are not used yet: all page text is still sent to the model. Nothing is ranked or limited until R2 to R4 are connected, so a run with the flag on can exceed `MAX_CONTENT_TOKENS`. With the flag off (the default), the capped baseline runs for both normal and streaming modes.
 - There is no RAG safety cap in `config.py` yet.
-- The chat UI has no tool-call limit: if the model asks for several tools in one response they run one after another. `parallel_tool_calls=False` on the request would restrict it to one.
-- Brochure generation in the chat can sit empty for a while, because scraping and link selection happen before the first streamed text.
+- The chat's `while True` loop has no iteration cap, so a model that keeps requesting tools would loop. `json.loads` of the tool arguments is not guarded against malformed JSON.
+- The chat shows nothing from the tools until the final model reply starts, so brochure requests can sit empty for a while (scraping, link selection, and two model calls).
+- `brochure_releated_images` is a placeholder that returns a fixed example URL (and has a spelling typo in its name); the model will present that URL as if it were real.
+- Chat history grows every turn and the full brochure is sent back as a tool result, so long chats get expensive.
 - `stream_brochure_with_ui.py` still has leftover tutorial code (`message_gpt`, `stream_gpt`, the example row and the "Message Shouter" title).
 - The link-selection step is not deterministic, so two runs on the same site can fetch different pages. Cache fetched pages (for example to a JSON file) when comparing baseline and RAG.
 - The last chunk of a page can be tiny, with only a token or two of new text.

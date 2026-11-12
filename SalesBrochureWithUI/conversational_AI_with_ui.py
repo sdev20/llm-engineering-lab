@@ -94,11 +94,6 @@ tools_schema = [
         }
 ]
 
-
-
-
-
-
 # def tool_calls_with_streaming_no_llm_at_the_end(reply, tool_calls_dict):
     # shown = reply + "\n\n" if reply else ""
     
